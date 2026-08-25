@@ -2,9 +2,28 @@ import { useEffect, useState } from "react";
 import { useParams, Link, useNavigate } from "react-router-dom";
 import { Pencil, Save, X, Trash2 } from "lucide-react";
 import { supabase } from "../supabaseClient";
-import { fmtDate } from "../lib/dueDates";
+import RelationshipSection from "../components/RelationshipSection";
 
 const FIELD = "text-sm px-3 py-2 rounded-md border w-full";
+
+const OFFICER_FIELDS = [
+  { key: "role", label: "Role", type: "select", options: ["Director", "Secretary"], default: "Director" },
+  { key: "appointed_on", label: "Appointed", type: "date" },
+  { key: "resigned_on", label: "Resigned", type: "date" },
+  { key: "status", label: "Status", type: "select", options: ["Active", "Resigned"], default: "Active" },
+  { key: "notes", label: "Notes", type: "text" },
+];
+const PSC_FIELDS = [
+  { key: "nature_of_control", label: "Nature of control", type: "text" },
+  { key: "notified_on", label: "Notified", type: "date" },
+  { key: "notes", label: "Notes", type: "text" },
+];
+const SHAREHOLDER_FIELDS = [
+  { key: "share_class", label: "Class", type: "text", default: "Ordinary" },
+  { key: "shares_held", label: "Shares", type: "number" },
+  { key: "currency", label: "Currency", type: "text", default: "GBP" },
+  { key: "notes", label: "Notes", type: "text" },
+];
 
 export default function PersonDetail() {
   const { id } = useParams();
@@ -13,22 +32,25 @@ export default function PersonDetail() {
   const [officers, setOfficers] = useState([]);
   const [pscs, setPscs] = useState([]);
   const [shareholders, setShareholders] = useState([]);
+  const [companies, setCompanies] = useState([]);
   const [editing, setEditing] = useState(false);
   const [form, setForm] = useState(null);
   const [saving, setSaving] = useState(false);
 
   async function load() {
-    const [p, o, ps, sh] = await Promise.all([
+    const [p, o, ps, sh, co] = await Promise.all([
       supabase.from("people").select("*").eq("id", id).single(),
       supabase.from("company_officers").select("*, companies_view(id, name)").eq("person_id", id),
       supabase.from("company_pscs").select("*, companies_view(id, name)").eq("person_id", id),
       supabase.from("company_shareholders").select("*, companies_view(id, name)").eq("person_id", id),
+      supabase.from("companies_view").select("id, name").order("name"),
     ]);
     setPerson(p.data);
     setForm(p.data);
     setOfficers(o.data || []);
     setPscs(ps.data || []);
     setShareholders(sh.data || []);
+    setCompanies(co.data || []);
   }
 
   useEffect(() => {
@@ -121,19 +143,15 @@ export default function PersonDetail() {
       )}
 
       <Section title="Companies (as director / secretary)">
-        {officers.length === 0 ? <Empty /> : officers.map((o) => (
-          <CompanyRow key={o.id} co={o.companies_view} sub={`${o.role} · appointed ${fmtDate(o.appointed_on)}${o.status === "Resigned" ? " · resigned" : ""}`} />
-        ))}
+        <RelationshipSection table="company_officers" personId={id} companies={companies} rows={officers} fields={OFFICER_FIELDS} onChange={load} />
       </Section>
 
       <Section title="Persons with significant control">
-        {pscs.length === 0 ? <Empty /> : pscs.map((p) => <CompanyRow key={p.id} co={p.companies_view} sub={p.nature_of_control} />)}
+        <RelationshipSection table="company_pscs" personId={id} companies={companies} rows={pscs} fields={PSC_FIELDS} onChange={load} />
       </Section>
 
       <Section title="Shareholdings">
-        {shareholders.length === 0 ? <Empty /> : shareholders.map((s) => (
-          <CompanyRow key={s.id} co={s.companies_view} sub={`${s.shares_held ?? "—"} ${s.share_class} shares`} />
-        ))}
+        <RelationshipSection table="company_shareholders" personId={id} companies={companies} rows={shareholders} fields={SHAREHOLDER_FIELDS} onChange={load} />
       </Section>
 
       {!editing && person.notes && (
@@ -166,22 +184,4 @@ function Section({ title, children }) {
       <div className="flex flex-col gap-2">{children}</div>
     </div>
   );
-}
-
-function CompanyRow({ co, sub }) {
-  if (!co) return null;
-  return (
-    <Link
-      to={`/companies/${co.id}`}
-      className="rounded-md border p-3 flex items-center justify-between hover:shadow-sm"
-      style={{ borderColor: "var(--rule)", background: "var(--card)" }}
-    >
-      <span className="font-medium text-sm">{co.name}</span>
-      <span className="text-xs" style={{ color: "var(--ink-muted)" }}>{sub}</span>
-    </Link>
-  );
-}
-
-function Empty() {
-  return <div className="text-sm italic" style={{ color: "var(--ink-muted)" }}>None on file.</div>;
 }

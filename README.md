@@ -13,13 +13,17 @@ dates, built to the same design as the IFK Group Company Register:
   Year-End Accounts +1 year, Personal Tax +6 months with the payment-type
   note regenerated automatically). Filed items drop out of the default
   view; there's a "Show completed" toggle to see them again.
-- **Companies** — full detail per company: identity fields (UTR, VAT
-  number, Authentication Code, incorporation date), directors, PSCs,
-  shareholders, and that company's own due dates (same mark-done control).
+- **Companies** — add new companies directly in the app, plus full detail
+  per company: identity fields (UTR, VAT number, Authentication Code,
+  incorporation date), directors, PSCs, shareholders, and that company's
+  own due dates (same mark-done control). Officers, PSCs, and shareholders
+  can be added, edited, and removed directly on the page — pick an
+  existing person from the dropdown, no need to leave the app.
 - **People** — add, edit, and delete people directly in the app; every
   director/PSC/shareholder is listed with a bipartite relationship map
   (people ↔ companies) and a page per person showing every company
-  they're linked to.
+  they're linked to. The same add/edit/remove controls work from the
+  person's side too — pick a company instead of a person.
 - **Admin Access** — admins-only screen to manage who can see/edit each
   company's Authentication Code.
 - Supabase Auth login gate — nothing is visible until signed in.
@@ -130,10 +134,11 @@ confirmed before being relied on. Edit those records directly in the app
 
 ## Not yet built
 
-- Inline add/edit forms for officers, PSCs, and shareholders themselves
-  (people can be added/edited directly; linking a person to a company as
-  a director/PSC/shareholder is still done via the Supabase table editor
-  — the schema and RLS are already set up for it).
+- Adding due dates for a brand-new company still needs the Supabase table
+  editor (inserting into `due_dates` with the right `task_type`,
+  `due_date`, and `due_by`) — the tracker only auto-generates the *next*
+  occurrence once an existing row is marked done, it doesn't seed the
+  first one for you.
 - Email reminders ahead of due dates (the IFK Register has this on its own
   roadmap too — Supabase Edge Functions + Resend would be the natural fit
   here as well).

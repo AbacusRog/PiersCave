@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
-import { AlertTriangle, ArrowUpDown, Info } from "lucide-react";
+import { useEffect, useMemo, useState, useCallback } from "react";
+import { AlertTriangle, ArrowUpDown, Info, Check, Loader2 } from "lucide-react";
 import { supabase } from "../supabaseClient";
-import { fmtDate, statusOf, STATUS_STYLE, TASK_TYPES } from "../lib/dueDates";
+import { fmtDate, statusOf, STATUS_STYLE, TASK_TYPES, withinWindow, markDoneAndAdvance } from "../lib/dueDates";
 import StatusBadge from "../components/StatusBadge";
 
 const TAB_COLORS = ["#0B5563", "#6B4C7A", "#9C6B14", "#35507A", "#7A3B3B", "#3D6657"];
@@ -11,9 +11,11 @@ export default function DueDates() {
   const [companies, setCompanies] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [busyId, setBusyId] = useState(null);
 
   const [ownerFilter, setOwnerFilter] = useState("ALL");
   const [taskFilter, setTaskFilter] = useState("ALL");
+  const [showCompleted, setShowCompleted] = useState(false);
   const [sortKey, setSortKey] = useState("dueBy");
   const [sortDir, setSortDir] = useState("asc");
 
@@ -23,63 +25,82 @@ export default function DueDates() {
     return d;
   }, []);
 
-  useEffect(() => {
-    async function load() {
-      setLoading(true);
-      setError("");
-      const [dd, co, pp] = await Promise.all([
-        supabase.from("due_dates").select("*"),
-        supabase.from("companies_view").select("id, name, previous_names, company_number"),
-        supabase.from("people").select("id, full_name"),
-      ]);
-      if (dd.error || co.error || pp.error) {
-        setError((dd.error || co.error || pp.error).message);
-        setLoading(false);
-        return;
-      }
-
-      const coMap = Object.fromEntries(co.data.map((c, i) => [c.id, { ...c, color: TAB_COLORS[i % TAB_COLORS.length] }]));
-      const ppMap = Object.fromEntries(pp.data.map((p, i) => [p.id, { ...p, color: TAB_COLORS[(co.data.length + i) % TAB_COLORS.length] }]));
-
-      const joined = dd.data.map((r) => {
-        const owner = r.company_id ? coMap[r.company_id] : ppMap[r.person_id];
-        return {
-          ...r,
-          ownerKey: r.company_id || r.person_id,
-          ownerName: owner ? (owner.name || owner.full_name) : "Unknown",
-          ownerSub: owner ? owner.company_number || "Personal — Self Assessment" : "",
-          ownerColor: owner ? owner.color : "#999",
-          status: statusOf(r.due_by, today),
-        };
-      });
-
-      setCompanies([
-        ...co.data.map((c, i) => ({ id: c.id, name: c.name, sub: c.company_number, color: TAB_COLORS[i % TAB_COLORS.length] })),
-        ...pp.data.map((p, i) => ({
-          id: p.id,
-          name: p.full_name,
-          sub: "Personal — Self Assessment",
-          color: TAB_COLORS[(co.data.length + i) % TAB_COLORS.length],
-        })),
-      ]);
-      setRows(joined);
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    const [dd, co, pp] = await Promise.all([
+      supabase.from("due_dates").select("*"),
+      supabase.from("companies_view").select("id, name, previous_names, company_number"),
+      supabase.from("people").select("id, full_name"),
+    ]);
+    if (dd.error || co.error || pp.error) {
+      setError((dd.error || co.error || pp.error).message);
       setLoading(false);
+      return;
+    }
+
+    const coMap = Object.fromEntries(co.data.map((c, i) => [c.id, { ...c, color: TAB_COLORS[i % TAB_COLORS.length] }]));
+    const ppMap = Object.fromEntries(pp.data.map((p, i) => [p.id, { ...p, color: TAB_COLORS[(co.data.length + i) % TAB_COLORS.length] }]));
+
+    const joined = dd.data.map((r) => {
+      const owner = r.company_id ? coMap[r.company_id] : ppMap[r.person_id];
+      return {
+        ...r,
+        ownerKey: r.company_id || r.person_id,
+        ownerName: owner ? (owner.name || owner.full_name) : "Unknown",
+        ownerSub: owner ? owner.company_number || "Personal — Self Assessment" : "",
+        ownerColor: owner ? owner.color : "#999",
+        status: statusOf(r.due_by, today),
+      };
+    });
+
+    setCompanies([
+      ...co.data.map((c, i) => ({ id: c.id, name: c.name, sub: c.company_number, color: TAB_COLORS[i % TAB_COLORS.length] })),
+      ...pp.data.map((p, i) => ({
+        id: p.id,
+        name: p.full_name,
+        sub: "Personal — Self Assessment",
+        color: TAB_COLORS[(co.data.length + i) % TAB_COLORS.length],
+      })),
+    ]);
+    setRows(joined);
+    setLoading(false);
+  }, [today]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  async function handleMarkDone(row) {
+    setBusyId(row.id);
+    const { error } = await markDoneAndAdvance(supabase, row);
+    setBusyId(null);
+    if (error) {
+      alert("Couldn't mark this as done: " + error.message);
+      return;
     }
     load();
-  }, [today]);
+  }
+
+  // Windowed rows: only what's due within the next 24 months, plus
+  // (optionally) completed items for reference.
+  const windowed = useMemo(
+    () => rows.filter((r) => (showCompleted || !r.filed) && (r.filed || withinWindow(r.due_by, today))),
+    [rows, showCompleted, today]
+  );
 
   const counts = useMemo(() => {
     const c = { overdue: 0, red: 0, amber: 0, green: 0 };
-    rows.forEach((r) => c[r.status]++);
+    windowed.filter((r) => !r.filed).forEach((r) => c[r.status]++);
     return c;
-  }, [rows]);
+  }, [windowed]);
 
   const filtered = useMemo(() => {
-    let r = rows;
+    let r = windowed;
     if (ownerFilter !== "ALL") r = r.filter((x) => x.ownerKey === ownerFilter);
     if (taskFilter !== "ALL") r = r.filter((x) => x.task_type === taskFilter);
     return r;
-  }, [rows, ownerFilter, taskFilter]);
+  }, [windowed, ownerFilter, taskFilter]);
 
   const sorted = useMemo(() => {
     const arr = [...filtered];
@@ -112,7 +133,7 @@ export default function DueDates() {
         </span>
         <h1 className="ddt-serif text-3xl md:text-4xl font-semibold">Due Dates Tracker</h1>
         <p className="text-sm md:text-base" style={{ color: "var(--ink-muted)" }}>
-          Piers Cave — group companies &amp; personal Self Assessment
+          Piers Cave — group companies &amp; personal Self Assessment, next 24 months
         </p>
       </div>
 
@@ -162,27 +183,33 @@ export default function DueDates() {
           ))}
         </div>
 
-        <div className="flex flex-wrap gap-2 items-center">
-          <span className="text-xs font-semibold uppercase mr-1" style={{ color: "var(--ink-muted)", letterSpacing: "0.08em" }}>
-            Task
-          </span>
-          <button
-            onClick={() => setTaskFilter("ALL")}
-            className="ddt-chip text-xs px-3 py-1.5 rounded-full border font-medium"
-            style={taskFilter === "ALL" ? { background: "var(--accent)", color: "#fff", borderColor: "var(--accent)" } : { background: "var(--card)", borderColor: "var(--rule)" }}
-          >
-            All
-          </button>
-          {TASK_TYPES.map((t) => (
+        <div className="flex flex-wrap gap-2 items-center justify-between">
+          <div className="flex flex-wrap gap-2 items-center">
+            <span className="text-xs font-semibold uppercase mr-1" style={{ color: "var(--ink-muted)", letterSpacing: "0.08em" }}>
+              Task
+            </span>
             <button
-              key={t}
-              onClick={() => setTaskFilter(t)}
+              onClick={() => setTaskFilter("ALL")}
               className="ddt-chip text-xs px-3 py-1.5 rounded-full border font-medium"
-              style={taskFilter === t ? { background: "var(--accent)", color: "#fff", borderColor: "var(--accent)" } : { background: "var(--card)", borderColor: "var(--rule)" }}
+              style={taskFilter === "ALL" ? { background: "var(--accent)", color: "#fff", borderColor: "var(--accent)" } : { background: "var(--card)", borderColor: "var(--rule)" }}
             >
-              {t}
+              All
             </button>
-          ))}
+            {TASK_TYPES.map((t) => (
+              <button
+                key={t}
+                onClick={() => setTaskFilter(t)}
+                className="ddt-chip text-xs px-3 py-1.5 rounded-full border font-medium"
+                style={taskFilter === t ? { background: "var(--accent)", color: "#fff", borderColor: "var(--accent)" } : { background: "var(--card)", borderColor: "var(--rule)" }}
+              >
+                {t}
+              </button>
+            ))}
+          </div>
+          <label className="text-xs font-medium flex items-center gap-1.5 select-none" style={{ color: "var(--ink-muted)" }}>
+            <input type="checkbox" checked={showCompleted} onChange={(e) => setShowCompleted(e.target.checked)} />
+            Show completed
+          </label>
         </div>
       </div>
 
@@ -199,36 +226,55 @@ export default function DueDates() {
                 <th className="text-left px-3 py-3 font-semibold text-xs uppercase" style={{ color: "var(--ink-muted)", letterSpacing: "0.06em" }}>Due Date</th>
                 <SortableTh label="Due By" active={sortKey === "dueBy"} dir={sortDir} onClick={() => toggleSort("dueBy")} />
                 <th className="text-left px-3 py-3 font-semibold text-xs uppercase" style={{ color: "var(--ink-muted)", letterSpacing: "0.06em" }}>Notes</th>
+                <th className="text-left px-3 py-3 font-semibold text-xs uppercase" style={{ color: "var(--ink-muted)", letterSpacing: "0.06em" }}></th>
               </tr>
             </thead>
             <tbody>
-              {sorted.map((r) => {
-                return (
-                  <tr key={r.id} className="ddt-row border-t" style={{ borderColor: "var(--rule-soft)" }}>
-                    <td style={{ background: r.ownerColor, width: 4 }}></td>
-                    <td className="px-3 py-3">
+              {sorted.map((r) => (
+                <tr key={r.id} className="ddt-row border-t" style={{ borderColor: "var(--rule-soft)", opacity: r.filed ? 0.55 : 1 }}>
+                  <td style={{ background: r.ownerColor, width: 4 }}></td>
+                  <td className="px-3 py-3">
+                    {r.filed ? (
+                      <span className="inline-flex items-center gap-1.5 text-xs font-medium px-2 py-1 rounded-full" style={{ background: "var(--green-bg)", color: "var(--green)" }}>
+                        <Check size={11} /> Filed
+                      </span>
+                    ) : (
                       <StatusBadge status={r.status} dueBy={r.due_by} today={today} />
-                    </td>
-                    <td className="px-3 py-3">
-                      <div className="font-medium">{r.ownerName}</div>
-                      <div className="text-xs ddt-mono" style={{ color: "var(--ink-muted)" }}>{r.ownerSub}</div>
-                    </td>
-                    <td className="px-3 py-3 whitespace-nowrap">{r.task_type}</td>
-                    <td className="px-3 py-3 ddt-mono whitespace-nowrap">{fmtDate(r.due_date)}</td>
-                    <td className="px-3 py-3 ddt-mono whitespace-nowrap font-medium">{fmtDate(r.due_by)}</td>
-                    <td className="px-3 py-3 text-xs" style={{ color: "var(--ink-muted)", maxWidth: 260 }}>
-                      {r.amount && <div className="ddt-mono font-medium" style={{ color: "var(--ink)" }}>{r.amount}</div>}
-                      {r.note && <div>{r.note}</div>}
-                      {r.flag && (
-                        <div className="flex items-start gap-1 mt-1" style={{ color: "var(--amber)" }}>
-                          <AlertTriangle size={12} className="mt-0.5 flex-shrink-0" />
-                          <span>{r.flag}</span>
-                        </div>
-                      )}
-                    </td>
-                  </tr>
-                );
-              })}
+                    )}
+                  </td>
+                  <td className="px-3 py-3">
+                    <div className="font-medium">{r.ownerName}</div>
+                    <div className="text-xs ddt-mono" style={{ color: "var(--ink-muted)" }}>{r.ownerSub}</div>
+                  </td>
+                  <td className="px-3 py-3 whitespace-nowrap">{r.task_type}</td>
+                  <td className="px-3 py-3 ddt-mono whitespace-nowrap">{fmtDate(r.due_date)}</td>
+                  <td className="px-3 py-3 ddt-mono whitespace-nowrap font-medium">{fmtDate(r.due_by)}</td>
+                  <td className="px-3 py-3 text-xs" style={{ color: "var(--ink-muted)", maxWidth: 240 }}>
+                    {r.amount && <div className="ddt-mono font-medium" style={{ color: "var(--ink)" }}>{r.amount}</div>}
+                    {r.note && <div>{r.note}</div>}
+                    {r.flag && (
+                      <div className="flex items-start gap-1 mt-1" style={{ color: "var(--amber)" }}>
+                        <AlertTriangle size={12} className="mt-0.5 flex-shrink-0" />
+                        <span>{r.flag}</span>
+                      </div>
+                    )}
+                  </td>
+                  <td className="px-3 py-3 whitespace-nowrap">
+                    {!r.filed && (
+                      <button
+                        onClick={() => handleMarkDone(r)}
+                        disabled={busyId === r.id}
+                        className="text-xs font-medium flex items-center gap-1 px-2.5 py-1.5 rounded-md border"
+                        style={{ borderColor: "var(--rule)" }}
+                        title="Mark filed and create the next occurrence"
+                      >
+                        {busyId === r.id ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} />}
+                        Mark done
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              ))}
             </tbody>
           </table>
         </div>
@@ -237,13 +283,19 @@ export default function DueDates() {
       {/* Card list (mobile) */}
       <div className="md:hidden flex flex-col gap-3">
         {sorted.map((r) => (
-          <div key={r.id} className="rounded-md border p-4" style={{ borderColor: "var(--rule)", background: "var(--card)", borderLeft: `4px solid ${r.ownerColor}` }}>
+          <div key={r.id} className="rounded-md border p-4" style={{ borderColor: "var(--rule)", background: "var(--card)", borderLeft: `4px solid ${r.ownerColor}`, opacity: r.filed ? 0.6 : 1 }}>
             <div className="flex items-start justify-between gap-2 mb-2">
               <div>
                 <div className="font-medium">{r.ownerName}</div>
                 <div className="text-xs ddt-mono" style={{ color: "var(--ink-muted)" }}>{r.ownerSub}</div>
               </div>
-              <StatusBadge status={r.status} dueBy={r.due_by} today={today} />
+              {r.filed ? (
+                <span className="inline-flex items-center gap-1.5 text-xs font-medium px-2 py-1 rounded-full" style={{ background: "var(--green-bg)", color: "var(--green)" }}>
+                  <Check size={11} /> Filed
+                </span>
+              ) : (
+                <StatusBadge status={r.status} dueBy={r.due_by} today={today} />
+              )}
             </div>
             <div className="text-sm font-medium mb-1">{r.task_type}</div>
             <div className="flex gap-4 text-xs ddt-mono mb-1" style={{ color: "var(--ink-muted)" }}>
@@ -257,6 +309,17 @@ export default function DueDates() {
                 <AlertTriangle size={12} className="mt-0.5 flex-shrink-0" />
                 <span>{r.flag}</span>
               </div>
+            )}
+            {!r.filed && (
+              <button
+                onClick={() => handleMarkDone(r)}
+                disabled={busyId === r.id}
+                className="mt-3 text-xs font-medium flex items-center gap-1 px-2.5 py-1.5 rounded-md border"
+                style={{ borderColor: "var(--rule)" }}
+              >
+                {busyId === r.id ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} />}
+                Mark done
+              </button>
             )}
           </div>
         ))}
@@ -273,9 +336,11 @@ export default function DueDates() {
           <Info size={13} className="mt-0.5 flex-shrink-0" />
           <p>
             <strong style={{ color: "var(--ink)" }}>Due Date</strong> is the period end, statement anniversary, or filed date;{" "}
-            <strong style={{ color: "var(--ink)" }}>Due By</strong> is the computed deadline. Rows are entered by hand each
-            cycle and never auto-advance — add the next occurrence once one is filed. Status: red = within 1 month,
-            amber = within 2 months, green = everything else, dark red = overdue.
+            <strong style={{ color: "var(--ink)" }}>Due By</strong> is the computed deadline. Only items due within the
+            next {24} months are shown. Marking a task <strong style={{ color: "var(--ink)" }}>done</strong> files it and
+            automatically creates its next occurrence (VAT: +3 months, Confirmation Statement / Year-End Accounts: +1 year,
+            Personal Tax: +6 months). Status: red = within 1 month, amber = within 2 months, green = everything else,
+            dark red = overdue.
           </p>
         </div>
       </div>

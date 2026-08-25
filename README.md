@@ -6,13 +6,20 @@ Helios Advanced Energy Systems Limited) plus his personal Self Assessment
 dates, built to the same design as the IFK Group Company Register:
 
 - **Due Dates Tracker** as the landing page — sortable, red/amber/green
-  status, "Due Date" (period/anniversary) vs "Due By" (computed deadline).
+  status, "Due Date" (period/anniversary) vs "Due By" (computed deadline),
+  filtered to a rolling 24-month window.
+- **Mark done → auto-recur** — ticking a task off files it and immediately
+  creates its next occurrence (VAT +3 months, Confirmation Statement /
+  Year-End Accounts +1 year, Personal Tax +6 months with the payment-type
+  note regenerated automatically). Filed items drop out of the default
+  view; there's a "Show completed" toggle to see them again.
 - **Companies** — full detail per company: identity fields (UTR, VAT
   number, Authentication Code, incorporation date), directors, PSCs,
-  shareholders, and that company's own due dates.
-- **People** — every director/PSC/shareholder, with a bipartite
-  relationship map (people ↔ companies) and a page per person showing
-  every company they're linked to.
+  shareholders, and that company's own due dates (same mark-done control).
+- **People** — add, edit, and delete people directly in the app; every
+  director/PSC/shareholder is listed with a bipartite relationship map
+  (people ↔ companies) and a page per person showing every company
+  they're linked to.
 - **Admin Access** — admins-only screen to manage who can see/edit each
   company's Authentication Code.
 - Supabase Auth login gate — nothing is visible until signed in.
@@ -82,15 +89,29 @@ Same pattern as the IFK Register:
 underlying `companies` table also silently blocks non-admins from writing
 to that column, so it's protected on both reads and writes.
 
-### Due dates are entered by hand, on purpose
+### Due dates: mark done, next occurrence is generated for you
 
-Same convention as the IFK Register: `due_date` and `due_by` are literal
-values, not auto-computed or auto-advanced. When a filing is done, add the
-next occurrence yourself (or via the Supabase table editor) using:
+Each `due_dates` row has a `filed` flag. Clicking **Mark done** (on the
+tracker or a company page):
 
-- **VAT**: Due By = Due Date + 1 month + 7 days
-- **Confirmation Statement**: Due By = Due Date + 14 days
-- **Year-End Accounts**: Due By = Due Date + 9 months
+1. Sets `filed = true` on that row.
+2. Inserts the next occurrence, computed client-side in
+   `src/lib/dueDates.js`:
+   - **VAT**: Due Date + 3 months; Due By = new Due Date + 1 month + 7 days
+   - **Confirmation Statement**: Due Date + 1 year; Due By = + 14 days
+   - **Year-End Accounts**: Due Date + 1 year; Due By = + 9 months
+   - **Personal Tax**: Due Date + 6 months (alternates 31 Jan / 31 Jul);
+     the note is regenerated from the new date (e.g. "2026-27 balancing
+     payment + 2027-28 1st payment on account"); amount is set to `TBC`
+     since future amounts aren't known yet.
+
+Month arithmetic preserves "end of month" (so a 31 Aug period rolls to
+30 Nov, not 1 Dec) and handles leap-year Februarys correctly.
+
+The tracker only ever displays items due within the **next 24 months** —
+older filed items are hidden by default (toggle "Show completed" to see
+them) and anything beyond the 24-month horizon simply isn't shown yet.
+Nothing is deleted; it's a display filter, not a data cap.
 
 ## What's seeded vs what still needs confirming
 
@@ -109,9 +130,10 @@ confirmed before being relied on. Edit those records directly in the app
 
 ## Not yet built
 
-- Inline add/edit forms for officers, PSCs, and shareholders (use the
-  Supabase table editor for now — the schema and RLS are already set up
-  for it).
+- Inline add/edit forms for officers, PSCs, and shareholders themselves
+  (people can be added/edited directly; linking a person to a company as
+  a director/PSC/shareholder is still done via the Supabase table editor
+  — the schema and RLS are already set up for it).
 - Email reminders ahead of due dates (the IFK Register has this on its own
   roadmap too — Supabase Edge Functions + Resend would be the natural fit
   here as well).

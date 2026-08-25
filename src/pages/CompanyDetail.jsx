@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
 import { useParams, Link } from "react-router-dom";
-import { Pencil, Save, X, Lock } from "lucide-react";
+import { Pencil, Save, X, Lock, Check, Loader2 } from "lucide-react";
 import { supabase } from "../supabaseClient";
 import { useAuth } from "../lib/auth";
-import { fmtDate, statusOf } from "../lib/dueDates";
+import { fmtDate, statusOf, withinWindow, markDoneAndAdvance } from "../lib/dueDates";
 import StatusBadge from "../components/StatusBadge";
 
 const FIELD = "text-sm px-3 py-2 rounded-md border w-full";
@@ -19,6 +19,8 @@ export default function CompanyDetail() {
   const [editing, setEditing] = useState(false);
   const [form, setForm] = useState(null);
   const [saving, setSaving] = useState(false);
+  const [showCompleted, setShowCompleted] = useState(false);
+  const [busyId, setBusyId] = useState(null);
 
   const today = new Date();
   today.setHours(0, 0, 0, 0);
@@ -60,7 +62,20 @@ export default function CompanyDetail() {
     }
   }
 
+  async function handleMarkDone(row) {
+    setBusyId(row.id);
+    const { error } = await markDoneAndAdvance(supabase, row);
+    setBusyId(null);
+    if (error) {
+      alert("Couldn't mark this as done: " + error.message);
+      return;
+    }
+    load();
+  }
+
   if (!company) return <div className="p-8 text-sm" style={{ color: "var(--ink-muted)" }}>Loading…</div>;
+
+  const visibleDueDates = dueDates.filter((d) => (showCompleted || !d.filed) && (d.filed || withinWindow(d.due_by, today)));
 
   return (
     <div className="max-w-4xl mx-auto px-5 py-8 md:px-8">
@@ -180,7 +195,15 @@ export default function CompanyDetail() {
       </Section>
 
       {/* Due dates */}
-      <Section title="Upcoming due dates">
+      <Section
+        title="Due dates (next 24 months)"
+        right={
+          <label className="text-xs font-medium flex items-center gap-1.5 select-none" style={{ color: "var(--ink-muted)" }}>
+            <input type="checkbox" checked={showCompleted} onChange={(e) => setShowCompleted(e.target.checked)} />
+            Show completed
+          </label>
+        }
+      >
         <div className="rounded-md border overflow-hidden" style={{ borderColor: "var(--rule)" }}>
           <table className="w-full text-sm border-collapse">
             <thead>
@@ -189,17 +212,46 @@ export default function CompanyDetail() {
                 <th className="text-left px-3 py-2 text-xs font-semibold uppercase" style={{ color: "var(--ink-muted)" }}>Due Date</th>
                 <th className="text-left px-3 py-2 text-xs font-semibold uppercase" style={{ color: "var(--ink-muted)" }}>Due By</th>
                 <th className="text-left px-3 py-2 text-xs font-semibold uppercase" style={{ color: "var(--ink-muted)" }}>Status</th>
+                <th className="text-left px-3 py-2 text-xs font-semibold uppercase" style={{ color: "var(--ink-muted)" }}></th>
               </tr>
             </thead>
             <tbody>
-              {dueDates.map((d) => (
-                <tr key={d.id} className="ddt-row border-t" style={{ borderColor: "var(--rule-soft)" }}>
+              {visibleDueDates.map((d) => (
+                <tr key={d.id} className="ddt-row border-t" style={{ borderColor: "var(--rule-soft)", opacity: d.filed ? 0.55 : 1 }}>
                   <td className="px-3 py-2">{d.task_type}</td>
                   <td className="px-3 py-2 ddt-mono">{fmtDate(d.due_date)}</td>
                   <td className="px-3 py-2 ddt-mono font-medium">{fmtDate(d.due_by)}</td>
-                  <td className="px-3 py-2"><StatusBadge status={statusOf(d.due_by, today)} dueBy={d.due_by} today={today} /></td>
+                  <td className="px-3 py-2">
+                    {d.filed ? (
+                      <span className="inline-flex items-center gap-1.5 text-xs font-medium px-2 py-1 rounded-full" style={{ background: "var(--green-bg)", color: "var(--green)" }}>
+                        <Check size={11} /> Filed
+                      </span>
+                    ) : (
+                      <StatusBadge status={statusOf(d.due_by, today)} dueBy={d.due_by} today={today} />
+                    )}
+                  </td>
+                  <td className="px-3 py-2">
+                    {!d.filed && (
+                      <button
+                        onClick={() => handleMarkDone(d)}
+                        disabled={busyId === d.id}
+                        className="text-xs font-medium flex items-center gap-1 px-2.5 py-1.5 rounded-md border"
+                        style={{ borderColor: "var(--rule)" }}
+                      >
+                        {busyId === d.id ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} />}
+                        Mark done
+                      </button>
+                    )}
+                  </td>
                 </tr>
               ))}
+              {visibleDueDates.length === 0 && (
+                <tr>
+                  <td colSpan={5} className="px-3 py-4 text-sm text-center" style={{ color: "var(--ink-muted)" }}>
+                    Nothing due in the next 24 months.
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
         </div>
@@ -208,10 +260,13 @@ export default function CompanyDetail() {
   );
 }
 
-function Section({ title, children }) {
+function Section({ title, right, children }) {
   return (
     <div className="mb-8">
-      <h2 className="text-xs font-semibold uppercase mb-3" style={{ color: "var(--ink-muted)", letterSpacing: "0.08em" }}>{title}</h2>
+      <div className="flex items-center justify-between mb-3">
+        <h2 className="text-xs font-semibold uppercase" style={{ color: "var(--ink-muted)", letterSpacing: "0.08em" }}>{title}</h2>
+        {right}
+      </div>
       {children}
     </div>
   );

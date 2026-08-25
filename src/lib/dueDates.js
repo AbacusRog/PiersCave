@@ -1,10 +1,16 @@
-// Shared helpers for computing Due Date status (red/amber/green/overdue).
-// Kept in one place so the tracker, company detail, and person pages all
-// agree on the same rule: red = due within 1 month, amber = within 2
-// months, green = everything else, overdue = past due_by.
+// Shared helpers for computing Due Date status, the rolling 24-month
+// display window, and generating the next occurrence of a recurring task
+// when one is marked done.
 
 export function parseISO(iso) {
   return new Date(iso + "T00:00:00");
+}
+
+export function toISO(d) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
 }
 
 export function fmtDate(iso) {
@@ -43,3 +49,108 @@ export const STATUS_STYLE = {
 };
 
 export const TASK_TYPES = ["VAT", "Year-End Accounts", "Confirmation Statement", "Personal Tax"];
+
+/* ---------------------------------------------------------------
+   24-month rolling display window
+--------------------------------------------------------------- */
+export const WINDOW_MONTHS = 24;
+
+export function windowEnd(today) {
+  return addMonthsPreserveEom(toISO(today), WINDOW_MONTHS);
+}
+
+export function withinWindow(dueByISO, today) {
+  return dueByISO <= toISO(windowEnd(today));
+}
+
+/* ---------------------------------------------------------------
+   Month arithmetic that preserves "end of month" — needed because
+   period-end dates (VAT quarters, year ends) must stay at month-end
+   when rolled forward, not slide around like a naive setMonth() would.
+--------------------------------------------------------------- */
+export function addMonthsPreserveEom(iso, n) {
+  const d = parseISO(iso);
+  const day = d.getDate();
+  const lastDayOfCurrentMonth = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
+  const wasEndOfMonth = day === lastDayOfCurrentMonth;
+
+  const targetYear = d.getFullYear();
+  const targetMonthIndex = d.getMonth() + n;
+  const lastDayOfTargetMonth = new Date(targetYear, targetMonthIndex + 1, 0).getDate();
+  const newDay = wasEndOfMonth ? lastDayOfTargetMonth : Math.min(day, lastDayOfTargetMonth);
+
+  return new Date(targetYear, targetMonthIndex, newDay);
+}
+
+export function addDays(iso, n) {
+  const d = parseISO(iso);
+  d.setDate(d.getDate() + n);
+  return d;
+}
+
+/* ---------------------------------------------------------------
+   Recurrence rules per task type, and the note auto-generated for
+   the next Personal Tax occurrence (alternates 31 Jan / 31 Jul).
+--------------------------------------------------------------- */
+function taxYearLabel(aprilEndYear) {
+  return `${aprilEndYear - 1}-${String(aprilEndYear).slice(-2)}`;
+}
+
+function personalTaxNote(dueDateISO) {
+  const d = parseISO(dueDateISO);
+  const month = d.getMonth() + 1;
+  const year = d.getFullYear();
+  if (month === 1) {
+    return `${taxYearLabel(year - 1)} balancing payment + ${taxYearLabel(year)} 1st payment on account`;
+  }
+  return `${taxYearLabel(year)} 2nd payment on account`;
+}
+
+export function getNextOccurrence(row) {
+  let nextDueDate, nextDueBy, amount = null, note = null;
+
+  if (row.task_type === "VAT") {
+    nextDueDate = addMonthsPreserveEom(row.due_date, 3);
+    nextDueBy = addDays(toISO(addMonthsPreserveEom(toISO(nextDueDate), 1)), 7);
+  } else if (row.task_type === "Confirmation Statement") {
+    nextDueDate = addMonthsPreserveEom(row.due_date, 12);
+    nextDueBy = addDays(toISO(nextDueDate), 14);
+  } else if (row.task_type === "Year-End Accounts") {
+    nextDueDate = addMonthsPreserveEom(row.due_date, 12);
+    nextDueBy = addMonthsPreserveEom(toISO(nextDueDate), 9);
+  } else if (row.task_type === "Personal Tax") {
+    nextDueDate = addMonthsPreserveEom(row.due_date, 6);
+    nextDueBy = nextDueDate;
+    amount = "TBC";
+    note = personalTaxNote(toISO(nextDueDate));
+  } else {
+    throw new Error("Unknown task_type: " + row.task_type);
+  }
+
+  return {
+    company_id: row.company_id,
+    person_id: row.person_id,
+    task_type: row.task_type,
+    due_date: toISO(nextDueDate),
+    due_by: toISO(nextDueBy),
+    amount,
+    note,
+    flag: null,
+    filed: false,
+  };
+}
+
+/**
+ * Marks a due_dates row as filed and inserts the next occurrence in one
+ * go. Returns { error } — error is null on success.
+ */
+export async function markDoneAndAdvance(supabase, row) {
+  const { error: updateError } = await supabase.from("due_dates").update({ filed: true }).eq("id", row.id);
+  if (updateError) return { error: updateError };
+
+  const next = getNextOccurrence(row);
+  const { error: insertError } = await supabase.from("due_dates").insert(next);
+  if (insertError) return { error: insertError };
+
+  return { error: null };
+}

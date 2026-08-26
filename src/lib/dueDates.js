@@ -89,6 +89,19 @@ export function addDays(iso, n) {
 }
 
 /* ---------------------------------------------------------------
+   Compute Due By directly from a Due Date for a fresh occurrence
+   (used by the "Add due date" form — there's no prior row to advance
+   from yet, so this applies the same offset rules directly).
+--------------------------------------------------------------- */
+export function computeDueBy(taskType, dueDateISO) {
+  if (!dueDateISO) return "";
+  if (taskType === "VAT") return toISO(addDays(toISO(addMonthsPreserveEom(dueDateISO, 1)), 7));
+  if (taskType === "Confirmation Statement") return toISO(addDays(dueDateISO, 14));
+  if (taskType === "Year-End Accounts") return toISO(addMonthsPreserveEom(dueDateISO, 9));
+  return dueDateISO; // Personal Tax (and anything else) — due_by is the payment date itself
+}
+
+/* ---------------------------------------------------------------
    Recurrence rules per task type, and the note auto-generated for
    the next Personal Tax occurrence (alternates 31 Jan / 31 Jul).
 --------------------------------------------------------------- */

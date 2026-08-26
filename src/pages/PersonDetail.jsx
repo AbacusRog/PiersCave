@@ -1,8 +1,11 @@
 import { useEffect, useState } from "react";
 import { useParams, Link, useNavigate } from "react-router-dom";
-import { Pencil, Save, X, Trash2 } from "lucide-react";
+import { Pencil, Save, X, Trash2, Check, Loader2 } from "lucide-react";
 import { supabase } from "../supabaseClient";
+import { fmtDate, statusOf, withinWindow, markDoneAndAdvance } from "../lib/dueDates";
 import RelationshipSection from "../components/RelationshipSection";
+import AddDueDateForm from "../components/AddDueDateForm";
+import StatusBadge from "../components/StatusBadge";
 
 const FIELD = "text-sm px-3 py-2 rounded-md border w-full";
 
@@ -33,17 +36,24 @@ export default function PersonDetail() {
   const [pscs, setPscs] = useState([]);
   const [shareholders, setShareholders] = useState([]);
   const [companies, setCompanies] = useState([]);
+  const [dueDates, setDueDates] = useState([]);
+  const [showCompleted, setShowCompleted] = useState(false);
+  const [busyId, setBusyId] = useState(null);
   const [editing, setEditing] = useState(false);
   const [form, setForm] = useState(null);
   const [saving, setSaving] = useState(false);
 
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
   async function load() {
-    const [p, o, ps, sh, co] = await Promise.all([
+    const [p, o, ps, sh, co, dd] = await Promise.all([
       supabase.from("people").select("*").eq("id", id).single(),
       supabase.from("company_officers").select("*, companies_view(id, name)").eq("person_id", id),
       supabase.from("company_pscs").select("*, companies_view(id, name)").eq("person_id", id),
       supabase.from("company_shareholders").select("*, companies_view(id, name)").eq("person_id", id),
       supabase.from("companies_view").select("id, name").order("name"),
+      supabase.from("due_dates").select("*").eq("person_id", id).order("due_by"),
     ]);
     setPerson(p.data);
     setForm(p.data);
@@ -51,6 +61,7 @@ export default function PersonDetail() {
     setPscs(ps.data || []);
     setShareholders(sh.data || []);
     setCompanies(co.data || []);
+    setDueDates(dd.data || []);
   }
 
   useEffect(() => {
@@ -83,7 +94,20 @@ export default function PersonDetail() {
     navigate("/people");
   }
 
+  async function handleMarkDone(row) {
+    setBusyId(row.id);
+    const { error } = await markDoneAndAdvance(supabase, row);
+    setBusyId(null);
+    if (error) {
+      alert("Couldn't mark this as done: " + error.message);
+      return;
+    }
+    load();
+  }
+
   if (!person) return <div className="p-8 text-sm" style={{ color: "var(--ink-muted)" }}>Loading…</div>;
+
+  const visibleDueDates = dueDates.filter((d) => (showCompleted || !d.filed) && (d.filed || withinWindow(d.due_by, today)));
 
   return (
     <div className="max-w-4xl mx-auto px-5 py-8 md:px-8">
@@ -142,6 +166,76 @@ export default function PersonDetail() {
         <p className="text-sm mb-6" style={{ color: "var(--ink-muted)" }}>{person.correspondence_address}</p>
       )}
 
+      <Section
+        title="Due dates (next 24 months)"
+        right={
+          <label className="text-xs font-medium flex items-center gap-1.5 select-none" style={{ color: "var(--ink-muted)" }}>
+            <input type="checkbox" checked={showCompleted} onChange={(e) => setShowCompleted(e.target.checked)} />
+            Show completed
+          </label>
+        }
+      >
+        <div className="mb-2">
+          <AddDueDateForm personId={id} taskTypes={["Personal Tax"]} onAdded={load} />
+        </div>
+        <div className="rounded-md border overflow-hidden" style={{ borderColor: "var(--rule)" }}>
+          <table className="w-full text-sm border-collapse">
+            <thead>
+              <tr style={{ background: "var(--paper)" }}>
+                <th className="text-left px-3 py-2 text-xs font-semibold uppercase" style={{ color: "var(--ink-muted)" }}>Task</th>
+                <th className="text-left px-3 py-2 text-xs font-semibold uppercase" style={{ color: "var(--ink-muted)" }}>Due Date</th>
+                <th className="text-left px-3 py-2 text-xs font-semibold uppercase" style={{ color: "var(--ink-muted)" }}>Due By</th>
+                <th className="text-left px-3 py-2 text-xs font-semibold uppercase" style={{ color: "var(--ink-muted)" }}>Status</th>
+                <th className="text-left px-3 py-2 text-xs font-semibold uppercase" style={{ color: "var(--ink-muted)" }}>Amount / Note</th>
+                <th className="text-left px-3 py-2 text-xs font-semibold uppercase" style={{ color: "var(--ink-muted)" }}></th>
+              </tr>
+            </thead>
+            <tbody>
+              {visibleDueDates.map((d) => (
+                <tr key={d.id} className="ddt-row border-t" style={{ borderColor: "var(--rule-soft)", opacity: d.filed ? 0.55 : 1 }}>
+                  <td className="px-3 py-2">{d.task_type}</td>
+                  <td className="px-3 py-2 ddt-mono">{fmtDate(d.due_date)}</td>
+                  <td className="px-3 py-2 ddt-mono font-medium">{fmtDate(d.due_by)}</td>
+                  <td className="px-3 py-2">
+                    {d.filed ? (
+                      <span className="inline-flex items-center gap-1.5 text-xs font-medium px-2 py-1 rounded-full" style={{ background: "var(--green-bg)", color: "var(--green)" }}>
+                        <Check size={11} /> Filed
+                      </span>
+                    ) : (
+                      <StatusBadge status={statusOf(d.due_by, today)} dueBy={d.due_by} today={today} />
+                    )}
+                  </td>
+                  <td className="px-3 py-2 text-xs" style={{ color: "var(--ink-muted)" }}>
+                    {d.amount && <div className="ddt-mono font-medium" style={{ color: "var(--ink)" }}>{d.amount}</div>}
+                    {d.note && <div>{d.note}</div>}
+                  </td>
+                  <td className="px-3 py-2">
+                    {!d.filed && (
+                      <button
+                        onClick={() => handleMarkDone(d)}
+                        disabled={busyId === d.id}
+                        className="text-xs font-medium flex items-center gap-1 px-2.5 py-1.5 rounded-md border"
+                        style={{ borderColor: "var(--rule)" }}
+                      >
+                        {busyId === d.id ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} />}
+                        Mark done
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+              {visibleDueDates.length === 0 && (
+                <tr>
+                  <td colSpan={6} className="px-3 py-4 text-sm text-center" style={{ color: "var(--ink-muted)" }}>
+                    Nothing due in the next 24 months.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </Section>
+
       <Section title="Companies (as director / secretary)">
         <RelationshipSection table="company_officers" personId={id} companies={companies} rows={officers} fields={OFFICER_FIELDS} onChange={load} />
       </Section>
@@ -177,10 +271,13 @@ function EditField({ label, value, onChange, wide, textarea }) {
   );
 }
 
-function Section({ title, children }) {
+function Section({ title, right, children }) {
   return (
     <div className="mb-6">
-      <h2 className="text-xs font-semibold uppercase mb-2" style={{ color: "var(--ink-muted)", letterSpacing: "0.08em" }}>{title}</h2>
+      <div className="flex items-center justify-between mb-2">
+        <h2 className="text-xs font-semibold uppercase" style={{ color: "var(--ink-muted)", letterSpacing: "0.08em" }}>{title}</h2>
+        {right}
+      </div>
       <div className="flex flex-col gap-2">{children}</div>
     </div>
   );

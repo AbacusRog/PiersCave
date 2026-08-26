@@ -6,6 +6,7 @@ import { useAuth } from "../lib/auth";
 import { fmtDate, statusOf, withinWindow, markDoneAndAdvance } from "../lib/dueDates";
 import StatusBadge from "../components/StatusBadge";
 import RelationshipSection from "../components/RelationshipSection";
+import AddDueDateForm from "../components/AddDueDateForm";
 
 const FIELD = "text-sm px-3 py-2 rounded-md border w-full";
 
@@ -203,6 +204,9 @@ export default function CompanyDetail() {
           </label>
         }
       >
+        <div className="mb-2">
+          <AddDueDateForm companyId={id} taskTypes={["VAT", "Year-End Accounts", "Confirmation Statement"]} onAdded={load} />
+        </div>
         <div className="rounded-md border overflow-hidden" style={{ borderColor: "var(--rule)" }}>
           <table className="w-full text-sm border-collapse">
             <thead>

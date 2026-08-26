@@ -18,12 +18,18 @@ dates, built to the same design as the IFK Group Company Register:
   incorporation date), directors, PSCs, shareholders, and that company's
   own due dates (same mark-done control). Officers, PSCs, and shareholders
   can be added, edited, and removed directly on the page — pick an
-  existing person from the dropdown, no need to leave the app.
+  existing person from the dropdown, no need to leave the app. A new
+  company's first VAT / Year-End Accounts / Confirmation Statement due
+  dates can be added directly on its page too — Due By is worked out for
+  you from Due Date and is editable if a deadline was extended.
 - **People** — add, edit, and delete people directly in the app; every
   director/PSC/shareholder is listed with a bipartite relationship map
   (people ↔ companies) and a page per person showing every company
   they're linked to. The same add/edit/remove controls work from the
-  person's side too — pick a company instead of a person.
+  person's side too — pick a company instead of a person. Each person's
+  page also has its own Due Dates section — Piers's Personal Tax rows can
+  be added, marked done, and auto-advanced from here, same as a
+  company's due dates.
 - **Admin Access** — admins-only screen to manage who can see/edit each
   company's Authentication Code.
 - Supabase Auth login gate — nothing is visible until signed in.
@@ -134,11 +140,6 @@ confirmed before being relied on. Edit those records directly in the app
 
 ## Not yet built
 
-- Adding due dates for a brand-new company still needs the Supabase table
-  editor (inserting into `due_dates` with the right `task_type`,
-  `due_date`, and `due_by`) — the tracker only auto-generates the *next*
-  occurrence once an existing row is marked done, it doesn't seed the
-  first one for you.
 - Email reminders ahead of due dates (the IFK Register has this on its own
   roadmap too — Supabase Edge Functions + Resend would be the natural fit
   here as well).
